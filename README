@@ -1,0 +1,33 @@
+This is an update to the sony-laptop kernel module for Z series laptop. This driver has been tested on a VGN-Z21VN/X. It can break other Vaio laptops. 
+
+Disclaimer: This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+
+= Howto build =
+
+make		compile
+make test	load the compiled module, check dmesg output
+make install	installs to the system as update module
+make uninstall	remove from the system, fallback to standard module
+make clean	
+
+
+= Change Log =
+0.1
+2009/02/07
+Add support for switching on/off 3G module
+Initialize ECON variable (DSDT behaves different if !=0), maybe not necessary
+
+0.2
+2009/02/08
+Merged version from http://hanzubon.jp/tmp/VGN-Z90S/sony-laptop.c
+
+0.3
+2009/02/13
+Operating Linux in Stamina Mode ONLY
+WARNING! Switching to Speed Mode by booting into XP is NOT possible after having booted with this module version.
+Also loading this driver at runtime will break a running X server.
+Packaged as directory with Makefile
+
+For more information see 
+http://www.basyskom.org/~eva/log_installation_vaio_z21vnx.html
+http://thinkfat.blogspot.com/
