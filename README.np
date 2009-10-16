@@ -1,0 +1,9 @@
+
+This version of the sony-laptop module is the one distributed by
+Eva (see original README) plus the following changes:
+
+0.9np1:
+  - works with 2.6.31 (and probably not below)
+  - include patches from Mattia sent to acpi list for 2.6.32
+
+
