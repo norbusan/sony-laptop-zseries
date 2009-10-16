@@ -75,7 +75,7 @@
 	if (debug) printk(KERN_WARNING DRV_PFX  msg);	\
 } while (0)
 
-#define SONY_LAPTOP_DRIVER_VERSION	"0.9np1"
+#define SONY_LAPTOP_DRIVER_VERSION	"0.9np2"
 
 #define SONY_NC_CLASS		"sony-nc"
 #define SONY_NC_HID		"SNY5001"
@@ -645,7 +645,11 @@ static int sony_pf_probe(struct platform_device *pdev)
         return 0;
 }
 
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,31)
+static int sony_resume_noirq(struct device *pdev)
+#else
 static int sony_pf_resume(struct platform_device *pdev)
+#endif
 {
         /* on resume, restore previous state */
         if (speed_stamina == 1) {
@@ -658,15 +662,27 @@ static int sony_pf_resume(struct platform_device *pdev)
         return 0;
 }
 
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,31)
+static struct dev_pm_ops sony_dev_pm_ops = {
+	.resume_noirq = sony_resume_noirq,
+};
+#endif
+
 static atomic_t sony_pf_users = ATOMIC_INIT(0);
 static struct platform_driver sony_pf_driver = {
         .probe  = sony_pf_probe,
-#ifdef CONFIG_PM
-        .resume_early = sony_pf_resume,
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,31)
+#else
+	.resume_early = sony_pf_resume,
 #endif
         .driver = {
                    .name = "sony-laptop",
                    .owner = THIS_MODULE,
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,31)
+#ifdef CONFIG_PM
+        	   .pm = &sony_dev_pm_ops,
+#endif
+#endif
                    }
 };
 static struct platform_device *sony_pf_device;
@@ -791,6 +807,42 @@ SNC_HANDLE_NAMES(PCR_set, "SPCR");
 SNC_HANDLE_NAMES(CMI_get, "GCMI");
 SNC_HANDLE_NAMES(CMI_set, "SCMI");
 
+/* NORB */
+SNC_HANDLE_NAMES(SN_get, "SNIN");
+SNC_HANDLE_NAMES(SN_set, "SNNE", "SNCF");
+
+SNC_HANDLE_NAMES(HSC0_get, "HSC0");
+SNC_HANDLE_NAMES(HSC1_get, "HSC1");
+SNC_HANDLE_NAMES(HSC2_get, "HSC2");
+SNC_HANDLE_NAMES(HSC3_set, "HSC3");
+SNC_HANDLE_NAMES(HSC4_set, "HSC4");
+
+SNC_HANDLE_NAMES(F100_get, "F100");
+SNC_HANDLE_NAMES(F113_get, "F113");
+SNC_HANDLE_NAMES(F101_get, "F101");
+SNC_HANDLE_NAMES(F105_get, "F105");
+SNC_HANDLE_NAMES(F114_get, "F114");
+SNC_HANDLE_NAMES(F115_get, "F115");
+SNC_HANDLE_NAMES(F11D_get, "F11D");
+SNC_HANDLE_NAMES(F119_get, "F119");
+SNC_HANDLE_NAMES(F121_get, "F121");
+SNC_HANDLE_NAMES(F122_get, "F122");
+SNC_HANDLE_NAMES(F124_get, "F124");
+SNC_HANDLE_NAMES(F125_get, "F125");
+SNC_HANDLE_NAMES(F126_get, "F126");
+SNC_HANDLE_NAMES(F128_get, "F128");
+SNC_HANDLE_NAMES(HOMP_get, "HOMP");
+
+SNC_HANDLE_NAMES(SN01_get, "SNO1");
+SNC_HANDLE_NAMES(SN03_set, "SNO3");
+SNC_HANDLE_NAMES(SN04_get, "SNO4");
+SNC_HANDLE_NAMES(SN05_set, "SNO5");
+SNC_HANDLE_NAMES(SN06_set, "SNO6");
+
+SNC_HANDLE_NAMES(PWAK_get, "PWAK");
+SNC_HANDLE_NAMES(EAWK_set, "EAWK");
+
+
 static struct sony_nc_value sony_nc_values[] = {
 	SNC_HANDLE(brightness_default, snc_brightness_def_get,
 			snc_brightness_def_set, brightness_default_validate, 0),
@@ -811,6 +863,38 @@ static struct sony_nc_value sony_nc_values[] = {
 	SNC_HANDLE(CTR, snc_CTR_get, snc_CTR_set, NULL, 1),
 	SNC_HANDLE(PCR, snc_PCR_get, snc_PCR_set, NULL, 1),
 	SNC_HANDLE(CMI, snc_CMI_get, snc_CMI_set, NULL, 1),
+	/* NORB */
+	SNC_HANDLE(SN, snc_SN_get, snc_SN_set, NULL, 1),
+
+	SNC_HANDLE(HSC0, snc_HSC0_get, NULL, NULL, 1),
+	SNC_HANDLE(HSC3, NULL, snc_HSC3_set, NULL, 1),
+	SNC_HANDLE(HSC1, snc_HSC1_get, NULL, NULL, 1),
+	SNC_HANDLE(HSC4, NULL, snc_HSC4_set, NULL, 1),
+	SNC_HANDLE(HSC2,  snc_HSC2_get, NULL, NULL, 1),
+
+	SNC_HANDLE(F100,  snc_F100_get, NULL, NULL, 1),
+	SNC_HANDLE(F113,  snc_F113_get, NULL, NULL, 1),
+	SNC_HANDLE(F101,  snc_F101_get, NULL, NULL, 1),
+	SNC_HANDLE(F114,  snc_F114_get, NULL, NULL, 1),
+	SNC_HANDLE(F115,  snc_F115_get, NULL, NULL, 1),
+	SNC_HANDLE(F11D,  snc_F11D_get, NULL, NULL, 1),
+	SNC_HANDLE(F119,  snc_F119_get, NULL, NULL, 1),
+	SNC_HANDLE(F121,  snc_F121_get, NULL, NULL, 1),
+	SNC_HANDLE(F122,  snc_F122_get, NULL, NULL, 1),
+	SNC_HANDLE(F124,  snc_F124_get, NULL, NULL, 1),
+	SNC_HANDLE(F125,  snc_F125_get, NULL, NULL, 1),
+	SNC_HANDLE(F126,  snc_F126_get, NULL, NULL, 1),
+	SNC_HANDLE(F128,  snc_F128_get, NULL, NULL, 1),
+	SNC_HANDLE(F105,  snc_F105_get, NULL, NULL, 1),
+	SNC_HANDLE(HOMP,  snc_HOMP_get, NULL, NULL, 1),
+	SNC_HANDLE(SN01,  snc_SN01_get, NULL, NULL, 1),
+	SNC_HANDLE(SN03,  NULL, snc_SN03_set, NULL, 1),
+	SNC_HANDLE(SN04,  snc_SN04_get, NULL, NULL, 1),
+	SNC_HANDLE(SN05,  NULL, snc_SN05_set, NULL, 1),
+	SNC_HANDLE(SN06,  NULL, snc_SN06_set, NULL, 1),
+
+	SNC_HANDLE(PWAK,  snc_PWAK_get, NULL, NULL, 1),
+	SNC_HANDLE(EAWK,  NULL, snc_EAWK_set, NULL, 1),
 	SNC_HANDLE_NULL
 };
 
@@ -1154,15 +1238,23 @@ static acpi_status sony_walk_callback(acpi_handle handle, u32 level,
 {
 #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,27)
         struct acpi_device_info *info;
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,31)
+        if (ACPI_SUCCESS(acpi_get_object_info(handle, &info))) {
+#else
         struct acpi_buffer buffer = {ACPI_ALLOCATE_BUFFER, NULL};
 
         if (ACPI_SUCCESS(acpi_get_object_info(handle, &buffer))) {
                 info = buffer.pointer;
+#endif
                 
                 printk(KERN_WARNING DRV_PFX "method: name: %4.4s, args %X\n",
                         (char *)&info->name, info->param_count);
 
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,31)
+		kfree(info);
+#else
                 kfree(buffer.pointer);
+#endif
         }
 #else
         struct acpi_namespace_node *node;
@@ -1229,6 +1321,9 @@ static int sony_nc_resume(struct acpi_device *device)
 	if (sony_backlight_device &&
 			!sony_backlight_update_status(sony_backlight_device))
 		printk(KERN_WARNING DRV_PFX "unable to restore brightness level\n");
+	
+	/* re-read rfkill state */
+	sony_nc_rfkill_update();
 
 	return 0;
 }
@@ -1266,6 +1361,9 @@ static int sony_nc_setup_rfkill(struct acpi_device *device,
 	int err = 0;
 	struct rfkill *rfk;
 	enum rfkill_type type;
+	int result;
+	bool hwblock;
+
 	const char *name;
 
 	switch (nc_type) {
@@ -1294,6 +1392,10 @@ static int sony_nc_setup_rfkill(struct acpi_device *device,
 	if (!rfk)
 		return -ENOMEM;
 	
+	sony_call_snc_handle(0x124, 0x200, &result);
+	hwblock = !(result & 0x1);
+	rfkill_set_hw_state(rfk, hwblock);
+
 	err = rfkill_register(rfk);
 	if (err) {
 		rfkill_destroy(rfk);
