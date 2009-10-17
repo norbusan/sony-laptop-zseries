@@ -75,7 +75,7 @@
 	if (debug) printk(KERN_WARNING DRV_PFX  msg);	\
 } while (0)
 
-#define SONY_LAPTOP_DRIVER_VERSION	"0.9np3-DEV"
+#define SONY_LAPTOP_DRIVER_VERSION	"0.9np3dev"
 
 #define SONY_NC_CLASS		"sony-nc"
 #define SONY_NC_HID		"SNY5001"
