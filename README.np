@@ -17,3 +17,12 @@ Eva (see original README) plus the following changes:
   - include patches from Mattia sent to acpi list for 2.6.32
 
 
+INSTALLATION:
+-------------
+If you have dkms installed you can do as root
+- unpack the module to /usr/src
+- call as root 
+	dkms add -m sony-laptop-zseries -v VERSION
+  where VERSION is the current version you have unpacked.
+  After that new modules should be build automatically with kernel upgrades.
+
