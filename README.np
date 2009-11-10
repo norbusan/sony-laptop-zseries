@@ -2,13 +2,16 @@
 This version of the sony-laptop module is the one distributed by
 Eva (see original README) plus the following changes:
 
-0.9np3dev:
-  (unreleased)
+0.9np3:
   - add some Makefile code suggested by Raphael Gradenwitz
   - add a dkms.conf file
   - add nvidia_bl.c module source code from Mario Schwalbe
     it crashed my kernel (black screen, nothing working but Sysrq), but
     it might be worth investigating its features.
+  - bring sony-laptop.c in line with upstream's code from the kernel,
+    and guard all changes with #ifdef SONY_LAPTOP
+  - change key handling to match what there is in the kernel, that is
+    commit [master 85b4f88], and might break some functionality.
 
 0.9np2:
   - include fix for initial state of rfkills is wrong, see wireless-dev list
