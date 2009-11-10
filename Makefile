@@ -1,4 +1,5 @@
 obj-m += sony-laptop.o
+#obj-m += nvidia_bl.o
 obj-m += test.o
 
 KDIR := /lib/modules/$(shell uname -r)
@@ -27,13 +28,16 @@ clean:
 install:
 	mkdir -p $(KDIR)/updates/
 	cp sony-laptop.ko $(KDIR)/updates/
+	#cp nvidia_bl.ko $(KDIR)/updates/
 	depmod -a
 
 uninstall:
 	rm $(KDIR)/updates/sony-laptop.ko
+	#rm $(KDIR)/updates/nvidia_bl.ko
 	rmmod sony-laptop
+	#rmmod nvidia_bl
 	depmod -a
-	modprobe sony-laptop
+	modprobe sony-laptop 
 
 test:
 	rmmod sony-laptop
