@@ -3,9 +3,8 @@ This version of the sony-laptop module is the one distributed by
 Eva (see original README) plus the following changes:
 
 0.9np4:
-  - UNRELEASED
   - implement alternative rfkill setup routine to fix the rfkills on
-    the zseries XXXXXXX (patch by vick <weasalandme@yahoo.com>)
+    the zseries with Qualcomm WWAN (patch by vick <weasalandme@yahoo.com>)
 
 0.9np3:
   - add some Makefile code suggested by Raphael Gradenwitz

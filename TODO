@@ -1,3 +1,6 @@
 Include the code from nvidia_bl into the sony_laptop module and
 register/unregister on demand the backlight devices (sony platform for
 intel, nvidia_bl for nvidia).
+
+Make the alt_rfkill behaviour auto-detectable depending on the present 
+devices

@@ -89,7 +89,7 @@
 } while (0)
 
 #ifdef SONY_ZSERIES
-#define SONY_LAPTOP_DRIVER_VERSION	"0.9np3dev"
+#define SONY_LAPTOP_DRIVER_VERSION	"0.9np4"
 #else
 #define SONY_LAPTOP_DRIVER_VERSION	"0.6"
 #endif
@@ -142,7 +142,7 @@ MODULE_PARM_DESC(speed_stamina,
 static int alt_rfkill;
 module_param(alt_rfkill, int, 0444);
 MODULE_PARM_DESC(alt_rfkill,
-		 "Set this to one to use an alternative rfkill setup method (for NNNNNNN)");
+		 "Set this to one to use an alternative rfkill setup method (for Laptops with Qualcomm WWAN)");
 #endif
 
 #ifdef CONFIG_SONYPI_COMPAT
