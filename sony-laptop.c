@@ -89,7 +89,7 @@
 } while (0)
 
 #ifdef SONY_ZSERIES
-#define SONY_LAPTOP_DRIVER_VERSION	"0.9np3"
+#define SONY_LAPTOP_DRIVER_VERSION	"0.9np3dev"
 #else
 #define SONY_LAPTOP_DRIVER_VERSION	"0.6"
 #endif
@@ -138,6 +138,11 @@ static int speed_stamina;
 module_param(speed_stamina, int, 0444);
 MODULE_PARM_DESC(speed_stamina,
                  "Set this to 1 to enable SPEED mode on module load (EXPERIMENTAL)");
+
+static in alt_rfkill;
+module_param(alt_rfkill, int, 0444);
+MODULE_PARM_DESC(alt_rfkill,
+		 "Set this to one to use an alternative rfkill setup method (for NNNNNNN)");
 #endif
 
 #ifdef CONFIG_SONYPI_COMPAT
@@ -1466,13 +1471,39 @@ static int sony_nc_rfkill_setup(struct acpi_device *device)
 	if (sony_find_snc_handle(0x124) == -1)
 		return -1;
 
-	ret = sony_call_snc_handle(0x124, 0xb00, &result);
+#ifdef SONY_ZSERIES
+	if (alt_rfkill)
+		ret = sony_call_snc_handle(0x124, 0x00, &result);
+	else
+#endif
+		ret = sony_call_snc_handle(0x124, 0xb00, &result);
 	if (ret) {
 		printk(KERN_INFO DRV_PFX
 		       "Unable to enumerate rfkill devices: %x\n", ret);
 		return ret;
 	}
 
+#ifdef SONY_ZSERIES
+	if (alt_rfkill) {
+		if ((result & 0xff) == 0x00)
+			sony_nc_setup_rfkill(device, SONY_WIFI);
+		if (((result & 0xff00) >> 8) == 0x10)
+			sony_nc_setup_rfkill(device, SONY_BLUETOOTH);
+		if (((result & 0xff0000) >> 20) == 0x2)
+			sony_nc_setup_rfkill(device, SONY_WWAN);
+		if ((result >> 24) == 0x30)
+			sony_nc_setup_rfkill(device, SONY_WIMAX);
+	} else {
+		if (result & 0x1)
+			sony_nc_setup_rfkill(device, SONY_WIFI);
+		if (result & 0x2)
+			sony_nc_setup_rfkill(device, SONY_BLUETOOTH);
+		if (result & 0x1c)
+			sony_nc_setup_rfkill(device, SONY_WWAN);
+		if (result & 0x20)
+			sony_nc_setup_rfkill(device, SONY_WIMAX);
+	}
+#else
 	if (result & 0x1)
 		sony_nc_setup_rfkill(device, SONY_WIFI);
 	if (result & 0x2)
@@ -1481,6 +1512,7 @@ static int sony_nc_rfkill_setup(struct acpi_device *device)
 		sony_nc_setup_rfkill(device, SONY_WWAN);
 	if (result & 0x20)
 		sony_nc_setup_rfkill(device, SONY_WIMAX);
+#endif
 
 	return 0;
 }
