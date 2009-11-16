@@ -139,7 +139,7 @@ module_param(speed_stamina, int, 0444);
 MODULE_PARM_DESC(speed_stamina,
                  "Set this to 1 to enable SPEED mode on module load (EXPERIMENTAL)");
 
-static in alt_rfkill;
+static int alt_rfkill;
 module_param(alt_rfkill, int, 0444);
 MODULE_PARM_DESC(alt_rfkill,
 		 "Set this to one to use an alternative rfkill setup method (for NNNNNNN)");
