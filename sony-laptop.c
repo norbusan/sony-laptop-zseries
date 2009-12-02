@@ -89,7 +89,7 @@
 } while (0)
 
 #ifdef SONY_ZSERIES
-#define SONY_LAPTOP_DRIVER_VERSION	"0.9np4"
+#define SONY_LAPTOP_DRIVER_VERSION	"0.9np5"
 #else
 #define SONY_LAPTOP_DRIVER_VERSION	"0.6"
 #endif
@@ -139,10 +139,10 @@ module_param(speed_stamina, int, 0444);
 MODULE_PARM_DESC(speed_stamina,
                  "Set this to 1 to enable SPEED mode on module load (EXPERIMENTAL)");
 
-static int alt_rfkill;
-module_param(alt_rfkill, int, 0444);
-MODULE_PARM_DESC(alt_rfkill,
-		 "Set this to one to use an alternative rfkill setup method (for Laptops with Qualcomm WWAN)");
+static int old_rfkill;
+module_param(old_rfkill, int, 0444);
+MODULE_PARM_DESC(old_rfkill,
+		 "Use old method for setting up the refill switches");
 #endif
 
 #ifdef CONFIG_SONYPI_COMPAT
@@ -1472,11 +1472,14 @@ static int sony_nc_rfkill_setup(struct acpi_device *device)
 		return -1;
 
 #ifdef SONY_ZSERIES
-	if (alt_rfkill)
-		ret = sony_call_snc_handle(0x124, 0x00, &result);
-	else
+	if (old_rfkill)
 #endif
 		ret = sony_call_snc_handle(0x124, 0xb00, &result);
+#ifdef SONY_ZSERIES
+	else
+		ret = sony_call_snc_handle(0x124, 0x00, &result);
+#endif
+
 	if (ret) {
 		printk(KERN_INFO DRV_PFX
 		       "Unable to enumerate rfkill devices: %x\n", ret);
@@ -1484,16 +1487,7 @@ static int sony_nc_rfkill_setup(struct acpi_device *device)
 	}
 
 #ifdef SONY_ZSERIES
-	if (alt_rfkill) {
-		if ((result & 0xff) == 0x00)
-			sony_nc_setup_rfkill(device, SONY_WIFI);
-		if (((result & 0xff00) >> 8) == 0x10)
-			sony_nc_setup_rfkill(device, SONY_BLUETOOTH);
-		if (((result & 0xff0000) >> 20) == 0x2)
-			sony_nc_setup_rfkill(device, SONY_WWAN);
-		if ((result >> 24) == 0x30)
-			sony_nc_setup_rfkill(device, SONY_WIMAX);
-	} else {
+	if (old_rfkill) {
 		if (result & 0x1)
 			sony_nc_setup_rfkill(device, SONY_WIFI);
 		if (result & 0x2)
@@ -1501,6 +1495,15 @@ static int sony_nc_rfkill_setup(struct acpi_device *device)
 		if (result & 0x1c)
 			sony_nc_setup_rfkill(device, SONY_WWAN);
 		if (result & 0x20)
+			sony_nc_setup_rfkill(device, SONY_WIMAX);
+	} else {
+		if ((result & 0xff) == 0x00)
+			sony_nc_setup_rfkill(device, SONY_WIFI);
+		if (((result & 0xff00) >> 8) == 0x10)
+			sony_nc_setup_rfkill(device, SONY_BLUETOOTH);
+		if (((result & 0xff0000) >> 20) == 0x2)
+			sony_nc_setup_rfkill(device, SONY_WWAN);
+		if ((result >> 24) == 0x30)
 			sony_nc_setup_rfkill(device, SONY_WIMAX);
 	}
 #else
