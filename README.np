@@ -5,7 +5,7 @@ Eva (see original README) plus the following changes:
 0.9np5:
   - make alternative rfkill setup routine the default, as it works
     the same way on old BIOS. If there are problems using the
-    modules parameter old_rfill=1 reverts to old setup method.
+    modules parameter old_rfkill=1 reverts to old setup method.
     I will try to forward that to upstream, too.
 
 0.9np4:
