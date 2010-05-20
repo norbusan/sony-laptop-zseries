@@ -3,8 +3,8 @@ This version of the sony-laptop module is the one distributed by
 Eva (see original README) plus the following changes:
 
 0.9np7:
-  UNRELEASED
   - incorporate changes from upstream module for backlight
+  - incorporate use_kevent patch from Dmitry Torokhov
 
 0.9np6:
   - release working only with 2.6.33 and above, backward compatibility
