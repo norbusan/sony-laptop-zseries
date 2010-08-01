@@ -324,6 +324,25 @@ static int sony_laptop_input_keycode_map[] = {
 	KEY_MEDIA,	/* 58 SONYPI_EVENT_MEDIA_PRESSED */
 };
 
+static int acpi_callgetfunc(acpi_handle handle, char *name, int *result)
+{
+	struct acpi_buffer output;
+	union acpi_object out_obj;
+	acpi_status status;
+
+	output.length = sizeof(out_obj);
+	output.pointer = &out_obj;
+
+	status = acpi_evaluate_object(handle, name, NULL, &output);
+	if ((status == AE_OK) && (out_obj.type == ACPI_TYPE_INTEGER)) {
+		*result = out_obj.integer.value;
+		return 0;
+	}
+
+	printk(KERN_WARNING DRV_PFX "acpi_callreadfunc failed\n");
+
+	return -1;
+}
 /* release buttons after a short delay if pressed */
 static void do_sony_laptop_release_key(struct work_struct *work)
 {
@@ -536,7 +555,9 @@ static void sony_laptop_remove_input(void)
 #ifdef SONY_ZSERIES
 static int sony_ovga_dsm(int func, int arg)
 {
-        static char *path = "\\_SB.PCI0.OVGA._DSM";
+        //static char *path = "\\_SB.PCI0.OVGA._DSM";
+        //static char *path = "\\_SB.PCI0.GFX0._DSM";
+        static char *path = "\\_SB.PCI0.P0P2.DGPU._DSM";
         static char muid[] = {
                 /*00*/  0xA0, 0xA0, 0x95, 0x9D, 0x60, 0x00, 0x48, 0x4D,         /* MUID */
                 /*08*/  0xB3, 0x4D, 0x7E, 0x5F, 0xEA, 0x12, 0x9F, 0xD4,
@@ -561,7 +582,7 @@ static int sony_ovga_dsm(int func, int arg)
 
         result = acpi_evaluate_object(NULL, (char*)path, &input, &output);
         if (result) {
-                printk("%s failed: %d\n", path, result);
+                printk("%s failed: %d, func %d, para, %d.\n", path, result, func, arg);
                 return -1;
         }
 
@@ -653,20 +674,27 @@ static struct device_attribute sony_pf_speed_stamina_attr =
 static int sony_pf_probe(struct platform_device *pdev)
 {
         int result;
-
         result = device_create_file(&pdev->dev, &sony_pf_speed_stamina_attr);
         if (result)
                 printk(KERN_DEBUG "sony_pf_probe: failed to add speed/stamina switch\n");
 
-        /* initialize default, look at module param speed_stamina */
-        if (speed_stamina == 1) {
+        /* initialize default, look at module param speed_stamina or switch */
+	if (!ACPI_SUCCESS(acpi_callgetfunc(
+			NULL, "\\_SB.PCI0.LPCB.SNC.HSC1", &result))) {
+		result = -1;
+		dprintk("sony_nc_notify: "
+			"cannot query speed/stamina switch\n");
+	}
+	else
+		printk(KERN_INFO "Speed/stamina switch: %s.\n", result & 2?"stamina":"speed");
+			
+        if (speed_stamina == 1 || ((result >= 0) && !(result & 0x02))) {
                 sony_dgpu_on();
                 sony_led_speed();
         } else  if (speed_stamina == 0){
                 sony_dgpu_off();
                 sony_led_stamina();
         }
-
         return 0;
 }
 
@@ -940,25 +968,6 @@ static struct acpi_device *sony_nc_acpi_device = NULL;
 /*
  * acpi_evaluate_object wrappers
  */
-static int acpi_callgetfunc(acpi_handle handle, char *name, int *result)
-{
-	struct acpi_buffer output;
-	union acpi_object out_obj;
-	acpi_status status;
-
-	output.length = sizeof(out_obj);
-	output.pointer = &out_obj;
-
-	status = acpi_evaluate_object(handle, name, NULL, &output);
-	if ((status == AE_OK) && (out_obj.type == ACPI_TYPE_INTEGER)) {
-		*result = out_obj.integer.value;
-		return 0;
-	}
-
-	printk(KERN_WARNING DRV_PFX "acpi_callreadfunc failed\n");
-
-	return -1;
-}
 
 static int acpi_callsetfunc(acpi_handle handle, char *name, int value,
 			    int *result)
