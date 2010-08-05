@@ -161,6 +161,18 @@ static int sony_rfkill_handle;
 static struct rfkill *sony_rfkill_devices[N_SONY_RFKILL];
 static int sony_rfkill_address[N_SONY_RFKILL] = {0x300, 0x500, 0x700, 0x900};
 static void sony_nc_rfkill_update(void);
+static int sony_dsm_type = 0;
+static char *sony_acpi_path_dsm[] =
+{
+	"\\_SB.PCI0.OVGA._DSM",
+	"\\_SB.PCI0.P0P2.DGPU._DSM"
+};
+static char *sony_acpi_path_hsc1[] =
+{
+	"\\_SB.PCI0.LPC.SNC.HSC1",
+	"\\_SB.PCI0.LPCB.SNC.HSC1"
+};
+static acpi_handle sony_nc_acpi_handle;
 
 /*********** Input Devices ***********/
 
@@ -555,9 +567,6 @@ static void sony_laptop_remove_input(void)
 #ifdef SONY_ZSERIES
 static int sony_ovga_dsm(int func, int arg)
 {
-        //static char *path = "\\_SB.PCI0.OVGA._DSM";
-        //static char *path = "\\_SB.PCI0.GFX0._DSM";
-        static char *path = "\\_SB.PCI0.P0P2.DGPU._DSM";
         static char muid[] = {
                 /*00*/  0xA0, 0xA0, 0x95, 0x9D, 0x60, 0x00, 0x48, 0x4D,         /* MUID */
                 /*08*/  0xB3, 0x4D, 0x7E, 0x5F, 0xEA, 0x12, 0x9F, 0xD4,
@@ -580,9 +589,9 @@ static int sony_ovga_dsm(int func, int arg)
         params[3].type = ACPI_TYPE_INTEGER;
         params[3].integer.value = arg;
 
-        result = acpi_evaluate_object(NULL, (char*)path, &input, &output);
+        result = acpi_evaluate_object(NULL, (char*)sony_acpi_path_dsm[sony_dsm_type], &input, &output);
         if (result) {
-                printk("%s failed: %d, func %d, para, %d.\n", path, result, func, arg);
+                printk("%s failed: %d, func %d, para, %d.\n", sony_acpi_path_dsm[sony_dsm_type], result, func, arg);
                 return -1;
         }
 
@@ -674,24 +683,41 @@ static struct device_attribute sony_pf_speed_stamina_attr =
 static int sony_pf_probe(struct platform_device *pdev)
 {
         int result;
+	
+	/* Determine which variant, VGN or VPC */
+	if(ACPI_SUCCESS(acpi_callgetfunc(NULL, "\\_SB.PCI0.P0P2.DGPU._STA", &result)))
+		sony_dsm_type = 1;
+	
+	printk(KERN_INFO "Determined GFX switch ACPI path as %s.\n", sony_acpi_path_dsm[sony_dsm_type]);
         result = device_create_file(&pdev->dev, &sony_pf_speed_stamina_attr);
         if (result)
                 printk(KERN_DEBUG "sony_pf_probe: failed to add speed/stamina switch\n");
 
         /* initialize default, look at module param speed_stamina or switch */
-	if (!ACPI_SUCCESS(acpi_callgetfunc(
-			NULL, "\\_SB.PCI0.LPCB.SNC.HSC1", &result))) {
+	if (!ACPI_SUCCESS(acpi_callgetfunc(NULL, sony_acpi_path_hsc1[sony_dsm_type], &result))) {
 		result = -1;
 		dprintk("sony_nc_notify: "
 			"cannot query speed/stamina switch\n");
 	}
 	else
-		printk(KERN_INFO "Speed/stamina switch: %s.\n", result & 2?"stamina":"speed");
-			
-        if (speed_stamina == 1 || ((result >= 0) && !(result & 0x02))) {
+	{
+		printk(KERN_INFO "Speed/stamina switch: %s.\n", (result & 0x80)?"auto":(result & 2)?"stamina":"speed");
+		if(!(result & 2))
+			speed_stamina = 1;
+		else if((result & 0x80) && sony_dsm_type == 1)
+		{
+			if((ACPI_SUCCESS(acpi_callgetfunc(NULL, "\\_SB.ADP1._PSR", &result))) && (result == 1))
+			{
+				printk(KERN_INFO "PSU connected - Selecting speed mode.\n");
+				speed_stamina = 1;
+			}
+		}
+	}
+	
+        if (speed_stamina == 1) {
                 sony_dgpu_on();
                 sony_led_speed();
-        } else  if (speed_stamina == 0){
+        } else {
                 sony_dgpu_off();
                 sony_led_stamina();
         }
@@ -961,7 +987,6 @@ static struct sony_nc_value sony_nc_values[] = {
 	SNC_HANDLE_NULL
 };
 
-static acpi_handle sony_nc_acpi_handle;
 static struct acpi_device *sony_nc_acpi_device = NULL;
 
 /*
