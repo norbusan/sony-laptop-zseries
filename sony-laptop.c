@@ -44,7 +44,6 @@
 
 /*
  * defining SONY_ZSERIES includes code for graphics card switching
- * and backward compatibility with 2.6.31
  */
 #define SONY_ZSERIES
 
@@ -64,6 +63,7 @@
 #include <linux/kfifo.h>
 #include <linux/workqueue.h>
 #include <linux/acpi.h>
+#include <linux/slab.h>
 #include <acpi/acpi_drivers.h>
 #include <acpi/acpi_bus.h>
 #include <asm/uaccess.h>
@@ -83,13 +83,14 @@
 /* #define DEBUG_SPECIAL_SONY_FONCTIONS */
 #endif
 
+
 #define DRV_PFX			"sony-laptop: "
 #define dprintk(msg...)		do {			\
 	if (debug) printk(KERN_WARNING DRV_PFX  msg);	\
 } while (0)
 
 #ifdef SONY_ZSERIES
-#define SONY_LAPTOP_DRIVER_VERSION	"0.9np7"
+#define SONY_LAPTOP_DRIVER_VERSION     "0.9np8pre1"
 #else
 #define SONY_LAPTOP_DRIVER_VERSION	"0.6"
 #endif
@@ -137,7 +138,7 @@ MODULE_PARM_DESC(camera,
 static int speed_stamina;
 module_param(speed_stamina, int, 0444);
 MODULE_PARM_DESC(speed_stamina,
-                 "Set this to 1 to enable SPEED mode on module load (EXPERIMENTAL)");
+		 "Set this to 1 to enable SPEED mode on module load (EXPERIMENTAL)");
 
 #endif
 
@@ -161,18 +162,22 @@ static int sony_rfkill_handle;
 static struct rfkill *sony_rfkill_devices[N_SONY_RFKILL];
 static int sony_rfkill_address[N_SONY_RFKILL] = {0x300, 0x500, 0x700, 0x900};
 static void sony_nc_rfkill_update(void);
+#ifdef SONY_ZSERIES
 static int sony_dsm_type = 0;
 static char *sony_acpi_path_dsm[] =
 {
-	"\\_SB.PCI0.OVGA._DSM",
-	"\\_SB.PCI0.P0P2.DGPU._DSM"
+       "\\_SB.PCI0.OVGA._DSM",
+       "\\_SB.PCI0.P0P2.DGPU._DSM"
 };
 static char *sony_acpi_path_hsc1[] =
 {
-	"\\_SB.PCI0.LPC.SNC.HSC1",
-	"\\_SB.PCI0.LPCB.SNC.HSC1"
+       "\\_SB.PCI0.LPC.SNC.HSC1",
+       "\\_SB.PCI0.LPCB.SNC.HSC1"
 };
 static acpi_handle sony_nc_acpi_handle;
+
+static int acpi_callgetfunc(acpi_handle, char*, int*);
+#endif
 
 /*********** Input Devices ***********/
 
@@ -183,7 +188,7 @@ struct sony_laptop_input_s {
 	struct input_dev	*key_dev;
 	struct kfifo		fifo;
 	spinlock_t		fifo_lock;
-	struct workqueue_struct	*wq;
+	struct timer_list	release_key_timer;
 };
 
 static struct sony_laptop_input_s sony_laptop_input = {
@@ -272,6 +277,7 @@ static int sony_laptop_input_index[] = {
 	57,	/* 70 SONYPI_EVENT_VOLUME_DEC_PRESSED */
 	-1,	/* 71 SONYPI_EVENT_BRIGHTNESS_PRESSED */
 	58,	/* 72 SONYPI_EVENT_MEDIA_PRESSED */
+	59,	/* 72 SONYPI_EVENT_VENDOR_PRESSED */
 };
 
 static int sony_laptop_input_keycode_map[] = {
@@ -334,42 +340,30 @@ static int sony_laptop_input_keycode_map[] = {
 	KEY_VOLUMEUP,	/* 56 SONYPI_EVENT_VOLUME_INC_PRESSED */
 	KEY_VOLUMEDOWN,	/* 57 SONYPI_EVENT_VOLUME_DEC_PRESSED */
 	KEY_MEDIA,	/* 58 SONYPI_EVENT_MEDIA_PRESSED */
+	KEY_VENDOR,	/* 59 SONYPI_EVENT_VENDOR_PRESSED */
 };
 
-static int acpi_callgetfunc(acpi_handle handle, char *name, int *result)
-{
-	struct acpi_buffer output;
-	union acpi_object out_obj;
-	acpi_status status;
-
-	output.length = sizeof(out_obj);
-	output.pointer = &out_obj;
-
-	status = acpi_evaluate_object(handle, name, NULL, &output);
-	if ((status == AE_OK) && (out_obj.type == ACPI_TYPE_INTEGER)) {
-		*result = out_obj.integer.value;
-		return 0;
-	}
-
-	printk(KERN_WARNING DRV_PFX "acpi_callreadfunc failed\n");
-
-	return -1;
-}
 /* release buttons after a short delay if pressed */
-static void do_sony_laptop_release_key(struct work_struct *work)
+static void do_sony_laptop_release_key(unsigned long unused)
 {
 	struct sony_laptop_keypress kp;
+	unsigned long flags;
 
-	while (kfifo_out_locked(&sony_laptop_input.fifo, (unsigned char *)&kp,
-			sizeof(kp), &sony_laptop_input.fifo_lock)
-			== sizeof(kp)) {
-		msleep(10);
+	spin_lock_irqsave(&sony_laptop_input.fifo_lock, flags);
+
+	if (kfifo_out(&sony_laptop_input.fifo,
+		      (unsigned char *)&kp, sizeof(kp)) == sizeof(kp)) {
 		input_report_key(kp.dev, kp.key, 0);
 		input_sync(kp.dev);
 	}
+
+	/* If there is something in the fifo schedule next release. */
+	if (kfifo_len(&sony_laptop_input.fifo) != 0)
+		mod_timer(&sony_laptop_input.release_key_timer,
+			  jiffies + msecs_to_jiffies(10));
+
+	spin_unlock_irqrestore(&sony_laptop_input.fifo_lock, flags);
 }
-static DECLARE_WORK(sony_laptop_release_key_work,
-		do_sony_laptop_release_key);
 
 /* forward event to the input subsystem */
 static void sony_laptop_report_input_event(u8 event)
@@ -423,13 +417,13 @@ static void sony_laptop_report_input_event(u8 event)
 		/* we emit the scancode so we can always remap the key */
 		input_event(kp.dev, EV_MSC, MSC_SCAN, event);
 		input_sync(kp.dev);
-		kfifo_in_locked(&sony_laptop_input.fifo,
-			  (unsigned char *)&kp, sizeof(kp),
-			  &sony_laptop_input.fifo_lock);
 
-		if (!work_pending(&sony_laptop_release_key_work))
-			queue_work(sony_laptop_input.wq,
-					&sony_laptop_release_key_work);
+		/* schedule key release */
+		kfifo_in_locked(&sony_laptop_input.fifo,
+				(unsigned char *)&kp, sizeof(kp),
+				&sony_laptop_input.fifo_lock);
+		mod_timer(&sony_laptop_input.release_key_timer,
+			  jiffies + msecs_to_jiffies(10));
 	} else
 		dprintk("unknown input event %.2x\n", event);
 }
@@ -447,27 +441,21 @@ static int sony_laptop_setup_input(struct acpi_device *acpi_device)
 
 	/* kfifo */
 	spin_lock_init(&sony_laptop_input.fifo_lock);
-	error =
-	 kfifo_alloc(&sony_laptop_input.fifo, SONY_LAPTOP_BUF_SIZE, GFP_KERNEL);
+	error = kfifo_alloc(&sony_laptop_input.fifo,
+			    SONY_LAPTOP_BUF_SIZE, GFP_KERNEL);
 	if (error) {
 		printk(KERN_ERR DRV_PFX "kfifo_alloc failed\n");
 		goto err_dec_users;
 	}
 
-	/* init workqueue */
-	sony_laptop_input.wq = create_singlethread_workqueue("sony-laptop");
-	if (!sony_laptop_input.wq) {
-		printk(KERN_ERR DRV_PFX
-				"Unable to create workqueue.\n");
-		error = -ENXIO;
-		goto err_free_kfifo;
-	}
+	setup_timer(&sony_laptop_input.release_key_timer,
+		    do_sony_laptop_release_key, 0);
 
 	/* input keys */
 	key_dev = input_allocate_device();
 	if (!key_dev) {
 		error = -ENOMEM;
-		goto err_destroy_wq;
+		goto err_free_kfifo;
 	}
 
 	key_dev->name = "Sony Vaio Keys";
@@ -476,18 +464,15 @@ static int sony_laptop_setup_input(struct acpi_device *acpi_device)
 	key_dev->dev.parent = &acpi_device->dev;
 
 	/* Initialize the Input Drivers: special keys */
-	set_bit(EV_KEY, key_dev->evbit);
-	set_bit(EV_MSC, key_dev->evbit);
-	set_bit(MSC_SCAN, key_dev->mscbit);
+	input_set_capability(key_dev, EV_MSC, MSC_SCAN);
+
+	__set_bit(EV_KEY, key_dev->evbit);
 	key_dev->keycodesize = sizeof(sony_laptop_input_keycode_map[0]);
 	key_dev->keycodemax = ARRAY_SIZE(sony_laptop_input_keycode_map);
 	key_dev->keycode = &sony_laptop_input_keycode_map;
-	for (i = 0; i < ARRAY_SIZE(sony_laptop_input_keycode_map); i++) {
-		if (sony_laptop_input_keycode_map[i] != KEY_RESERVED) {
-			set_bit(sony_laptop_input_keycode_map[i],
-				key_dev->keybit);
-		}
-	}
+	for (i = 0; i < ARRAY_SIZE(sony_laptop_input_keycode_map); i++)
+		__set_bit(sony_laptop_input_keycode_map[i], key_dev->keybit);
+	__clear_bit(KEY_RESERVED, key_dev->keybit);
 
 	error = input_register_device(key_dev);
 	if (error)
@@ -507,9 +492,8 @@ static int sony_laptop_setup_input(struct acpi_device *acpi_device)
 	jog_dev->id.vendor = PCI_VENDOR_ID_SONY;
 	key_dev->dev.parent = &acpi_device->dev;
 
-	jog_dev->evbit[0] = BIT_MASK(EV_KEY) | BIT_MASK(EV_REL);
-	jog_dev->keybit[BIT_WORD(BTN_MOUSE)] = BIT_MASK(BTN_MIDDLE);
-	jog_dev->relbit[0] = BIT_MASK(REL_WHEEL);
+	input_set_capability(jog_dev, EV_KEY, BTN_MIDDLE);
+	input_set_capability(jog_dev, EV_REL, REL_WHEEL);
 
 	error = input_register_device(jog_dev);
 	if (error)
@@ -530,9 +514,6 @@ err_unregister_keydev:
 err_free_keydev:
 	input_free_device(key_dev);
 
-err_destroy_wq:
-	destroy_workqueue(sony_laptop_input.wq);
-
 err_free_kfifo:
 	kfifo_free(&sony_laptop_input.fifo);
 
@@ -543,12 +524,23 @@ err_dec_users:
 
 static void sony_laptop_remove_input(void)
 {
-	/* cleanup only after the last user has gone */
+	struct sony_laptop_keypress kp = { NULL };
+
+	/* Cleanup only after the last user has gone */
 	if (!atomic_dec_and_test(&sony_laptop_input.users))
 		return;
 
-	/* flush workqueue first */
-	flush_workqueue(sony_laptop_input.wq);
+	del_timer_sync(&sony_laptop_input.release_key_timer);
+
+	/*
+	 * Generate key-up events for remaining keys. Note that we don't
+	 * need locking since nobody is adding new events to the kfifo.
+	 */
+	while (kfifo_out(&sony_laptop_input.fifo,
+			 (unsigned char *)&kp, sizeof(kp)) == sizeof(kp)) {
+		input_report_key(kp.dev, kp.key, 0);
+		input_sync(kp.dev);
+	}
 
 	/* destroy input devs */
 	input_unregister_device(sony_laptop_input.key_dev);
@@ -559,7 +551,6 @@ static void sony_laptop_remove_input(void)
 		sony_laptop_input.jog_dev = NULL;
 	}
 
-	destroy_workqueue(sony_laptop_input.wq);
 	kfifo_free(&sony_laptop_input.fifo);
 }
 
@@ -683,37 +674,37 @@ static struct device_attribute sony_pf_speed_stamina_attr =
 static int sony_pf_probe(struct platform_device *pdev)
 {
         int result;
-	
-	/* Determine which variant, VGN or VPC */
-	if(ACPI_SUCCESS(acpi_callgetfunc(NULL, "\\_SB.PCI0.P0P2.DGPU._STA", &result)))
-		sony_dsm_type = 1;
-	
-	printk(KERN_INFO "Determined GFX switch ACPI path as %s.\n", sony_acpi_path_dsm[sony_dsm_type]);
+
+       /* Determine which variant, VGN or VPC */
+       if(ACPI_SUCCESS(acpi_callgetfunc(NULL, "\\_SB.PCI0.P0P2.DGPU._STA", &result)))
+               sony_dsm_type = 1;
+
+       printk(KERN_INFO "Determined GFX switch ACPI path as %s.\n", sony_acpi_path_dsm[sony_dsm_type]);
         result = device_create_file(&pdev->dev, &sony_pf_speed_stamina_attr);
         if (result)
                 printk(KERN_DEBUG "sony_pf_probe: failed to add speed/stamina switch\n");
 
         /* initialize default, look at module param speed_stamina or switch */
-	if (!ACPI_SUCCESS(acpi_callgetfunc(NULL, sony_acpi_path_hsc1[sony_dsm_type], &result))) {
-		result = -1;
-		dprintk("sony_nc_notify: "
-			"cannot query speed/stamina switch\n");
-	}
-	else
-	{
-		printk(KERN_INFO "Speed/stamina switch: %s.\n", (result & 0x80)?"auto":(result & 2)?"stamina":"speed");
-		if(!(result & 2))
-			speed_stamina = 1;
-		else if((result & 0x80) && sony_dsm_type == 1)
-		{
-			if((ACPI_SUCCESS(acpi_callgetfunc(NULL, "\\_SB.ADP1._PSR", &result))) && (result == 1))
-			{
-				printk(KERN_INFO "PSU connected - Selecting speed mode.\n");
-				speed_stamina = 1;
-			}
-		}
-	}
-	
+       if (!ACPI_SUCCESS(acpi_callgetfunc(NULL, sony_acpi_path_hsc1[sony_dsm_type], &result))) {
+               result = -1;
+               dprintk("sony_nc_notify: "
+                       "cannot query speed/stamina switch\n");
+       }
+       else
+       {
+               printk(KERN_INFO "Speed/stamina switch: %s.\n", (result & 0x80)?"auto":(result & 2)?"stamina":"speed");
+               if(!(result & 2))
+                       speed_stamina = 1;
+               else if((result & 0x80) && sony_dsm_type == 1)
+               {
+                       if((ACPI_SUCCESS(acpi_callgetfunc(NULL, "\\_SB.ADP1._PSR", &result))) && (result == 1))
+                       {
+                               printk(KERN_INFO "PSU connected - Selecting speed mode.\n");
+                               speed_stamina = 1;
+                       }
+               }
+       }
+
         if (speed_stamina == 1) {
                 sony_dgpu_on();
                 sony_led_speed();
@@ -741,11 +732,9 @@ static int sony_pf_resume(struct platform_device *pdev)
         return 0;
 }
 
-#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,31)
 static struct dev_pm_ops sony_dev_pm_ops = {
-	.resume_noirq = sony_resume_noirq,
+       .resume_noirq = sony_resume_noirq,
 };
-#endif
 #endif  /* SONY_ZSERIES */
 
 static atomic_t sony_pf_users = ATOMIC_INIT(0);
@@ -754,20 +743,14 @@ static struct platform_driver sony_pf_driver = {
 		   .name = "sony-laptop",
 		   .owner = THIS_MODULE,
 #ifdef SONY_ZSERIES
-#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,31)
 #ifdef CONFIG_PM
-        	   .pm = &sony_dev_pm_ops,
-#endif
+		   .pm = &sony_dev_pm_ops,
 #endif
 #endif
 		   }
 #ifdef SONY_ZSERIES
-	,
+       ,
         .probe  = sony_pf_probe,
-#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,31)
-#else
-	.resume_early = sony_pf_resume,
-#endif
 #endif
 };
 static struct platform_device *sony_pf_device;
@@ -929,6 +912,7 @@ SNC_HANDLE_NAMES(EAWK_set, "EAWK");
 #endif
 #endif
 
+
 static struct sony_nc_value sony_nc_values[] = {
 	SNC_HANDLE(brightness_default, snc_brightness_def_get,
 			snc_brightness_def_set, brightness_default_validate, 0),
@@ -951,47 +935,67 @@ static struct sony_nc_value sony_nc_values[] = {
 	SNC_HANDLE(CMI, snc_CMI_get, snc_CMI_set, NULL, 1),
 #ifdef SONY_ZSERIES
 #ifdef DEBUG_SPECIAL_SONY_FONCTIONS
-	SNC_HANDLE(SN, snc_SN_get, snc_SN_set, NULL, 1),
+       SNC_HANDLE(SN, snc_SN_get, snc_SN_set, NULL, 1),
 
-	SNC_HANDLE(HSC0, snc_HSC0_get, NULL, NULL, 1),
-	SNC_HANDLE(HSC3, NULL, snc_HSC3_set, NULL, 1),
-	SNC_HANDLE(HSC1, snc_HSC1_get, NULL, NULL, 1),
-	SNC_HANDLE(HSC4, NULL, snc_HSC4_set, NULL, 1),
-	SNC_HANDLE(HSC2,  snc_HSC2_get, NULL, NULL, 1),
+       SNC_HANDLE(HSC0, snc_HSC0_get, NULL, NULL, 1),
+       SNC_HANDLE(HSC3, NULL, snc_HSC3_set, NULL, 1),
+       SNC_HANDLE(HSC1, snc_HSC1_get, NULL, NULL, 1),
+       SNC_HANDLE(HSC4, NULL, snc_HSC4_set, NULL, 1),
+       SNC_HANDLE(HSC2,  snc_HSC2_get, NULL, NULL, 1),
 
-	SNC_HANDLE(F100,  snc_F100_get, NULL, NULL, 1),
-	SNC_HANDLE(F113,  snc_F113_get, NULL, NULL, 1),
-	SNC_HANDLE(F101,  snc_F101_get, NULL, NULL, 1),
-	SNC_HANDLE(F114,  snc_F114_get, NULL, NULL, 1),
-	SNC_HANDLE(F115,  snc_F115_get, NULL, NULL, 1),
-	SNC_HANDLE(F11D,  snc_F11D_get, NULL, NULL, 1),
-	SNC_HANDLE(F119,  snc_F119_get, NULL, NULL, 1),
-	SNC_HANDLE(F121,  snc_F121_get, NULL, NULL, 1),
-	SNC_HANDLE(F122,  snc_F122_get, NULL, NULL, 1),
-	SNC_HANDLE(F124,  snc_F124_get, NULL, NULL, 1),
-	SNC_HANDLE(F125,  snc_F125_get, NULL, NULL, 1),
-	SNC_HANDLE(F126,  snc_F126_get, NULL, NULL, 1),
-	SNC_HANDLE(F128,  snc_F128_get, NULL, NULL, 1),
-	SNC_HANDLE(F105,  snc_F105_get, NULL, NULL, 1),
-	SNC_HANDLE(HOMP,  snc_HOMP_get, NULL, NULL, 1),
-	SNC_HANDLE(SN01,  snc_SN01_get, NULL, NULL, 1),
-	SNC_HANDLE(SN03,  NULL, snc_SN03_set, NULL, 1),
-	SNC_HANDLE(SN04,  snc_SN04_get, NULL, NULL, 1),
-	SNC_HANDLE(SN05,  NULL, snc_SN05_set, NULL, 1),
-	SNC_HANDLE(SN06,  NULL, snc_SN06_set, NULL, 1),
+       SNC_HANDLE(F100,  snc_F100_get, NULL, NULL, 1),
+       SNC_HANDLE(F113,  snc_F113_get, NULL, NULL, 1),
+       SNC_HANDLE(F101,  snc_F101_get, NULL, NULL, 1),
+       SNC_HANDLE(F114,  snc_F114_get, NULL, NULL, 1),
+       SNC_HANDLE(F115,  snc_F115_get, NULL, NULL, 1),
+       SNC_HANDLE(F11D,  snc_F11D_get, NULL, NULL, 1),
+       SNC_HANDLE(F119,  snc_F119_get, NULL, NULL, 1),
+       SNC_HANDLE(F121,  snc_F121_get, NULL, NULL, 1),
+       SNC_HANDLE(F122,  snc_F122_get, NULL, NULL, 1),
+       SNC_HANDLE(F124,  snc_F124_get, NULL, NULL, 1),
+       SNC_HANDLE(F125,  snc_F125_get, NULL, NULL, 1),
+       SNC_HANDLE(F126,  snc_F126_get, NULL, NULL, 1),
+       SNC_HANDLE(F128,  snc_F128_get, NULL, NULL, 1),
+       SNC_HANDLE(F105,  snc_F105_get, NULL, NULL, 1),
+       SNC_HANDLE(HOMP,  snc_HOMP_get, NULL, NULL, 1),
+       SNC_HANDLE(SN01,  snc_SN01_get, NULL, NULL, 1),
+       SNC_HANDLE(SN03,  NULL, snc_SN03_set, NULL, 1),
+       SNC_HANDLE(SN04,  snc_SN04_get, NULL, NULL, 1),
+       SNC_HANDLE(SN05,  NULL, snc_SN05_set, NULL, 1),
+       SNC_HANDLE(SN06,  NULL, snc_SN06_set, NULL, 1),
 
-	SNC_HANDLE(PWAK,  snc_PWAK_get, NULL, NULL, 1),
-	SNC_HANDLE(EAWK,  NULL, snc_EAWK_set, NULL, 1),
+       SNC_HANDLE(PWAK,  snc_PWAK_get, NULL, NULL, 1),
+       SNC_HANDLE(EAWK,  NULL, snc_EAWK_set, NULL, 1),
 #endif
 #endif
 	SNC_HANDLE_NULL
 };
 
+static acpi_handle sony_nc_acpi_handle;
 static struct acpi_device *sony_nc_acpi_device = NULL;
 
 /*
  * acpi_evaluate_object wrappers
  */
+static int acpi_callgetfunc(acpi_handle handle, char *name, int *result)
+{
+	struct acpi_buffer output;
+	union acpi_object out_obj;
+	acpi_status status;
+
+	output.length = sizeof(out_obj);
+	output.pointer = &out_obj;
+
+	status = acpi_evaluate_object(handle, name, NULL, &output);
+	if ((status == AE_OK) && (out_obj.type == ACPI_TYPE_INTEGER)) {
+		*result = out_obj.integer.value;
+		return 0;
+	}
+
+	printk(KERN_WARNING DRV_PFX "acpi_callreadfunc failed\n");
+
+	return -1;
+}
 
 static int acpi_callsetfunc(acpi_handle handle, char *name, int value,
 			    int *result)
@@ -1160,7 +1164,7 @@ static int sony_backlight_get_brightness(struct backlight_device *bd)
 }
 
 static struct backlight_device *sony_backlight_device;
-static struct backlight_ops sony_backlight_ops = {
+static const struct backlight_ops sony_backlight_ops = {
 	.update_status = sony_backlight_update_status,
 	.get_brightness = sony_backlight_get_brightness,
 };
@@ -1198,10 +1202,18 @@ static struct sony_nc_event sony_100_events[] = {
 	{ 0x0A, SONYPI_EVENT_FNKEY_RELEASED },
 	{ 0x8C, SONYPI_EVENT_FNKEY_F12 },
 	{ 0x0C, SONYPI_EVENT_FNKEY_RELEASED },
+	{ 0x9d, SONYPI_EVENT_ZOOM_PRESSED },
+	{ 0x1d, SONYPI_EVENT_ANYBUTTON_RELEASED },
 	{ 0x9f, SONYPI_EVENT_CD_EJECT_PRESSED },
 	{ 0x1f, SONYPI_EVENT_ANYBUTTON_RELEASED },
 	{ 0xa1, SONYPI_EVENT_MEDIA_PRESSED },
 	{ 0x21, SONYPI_EVENT_ANYBUTTON_RELEASED },
+	{ 0xa4, SONYPI_EVENT_CD_EJECT_PRESSED },
+	{ 0x24, SONYPI_EVENT_ANYBUTTON_RELEASED },
+	{ 0xa5, SONYPI_EVENT_VENDOR_PRESSED },
+	{ 0x25, SONYPI_EVENT_ANYBUTTON_RELEASED },
+	{ 0xa6, SONYPI_EVENT_HELP_PRESSED },
+	{ 0x26, SONYPI_EVENT_ANYBUTTON_RELEASED },
 	{ 0, 0 },
 };
 
@@ -1280,24 +1292,24 @@ static void sony_nc_notify(struct acpi_device *device, u32 event)
 		} else if (sony_find_snc_handle(sony_rfkill_handle) == ev) {
 			sony_nc_rfkill_update();
 #ifdef SONY_ZSERIES
-		} else if (ev == 0xc) {
-			int result;
-			if (!ACPI_SUCCESS(acpi_callgetfunc(
-					handle, "HSC1", &result))) {
-				dprintk("sony_nc_notify: "
-					"cannot query speed/stamina switch\n");
-				return;
-			}
-			
-			/* restore original event number */
-			ev = event;
-			
-			if (result & 0x02)
-				acpi_bus_generate_proc_event(
-						sony_nc_acpi_device, 1, ev);
-			else
-				acpi_bus_generate_proc_event(
-						sony_nc_acpi_device, 0, ev);
+               } else if (ev == 0xc) {
+                       int result;
+                       if (!ACPI_SUCCESS(acpi_callgetfunc(
+                                       handle, "HSC1", &result))) {
+                               dprintk("sony_nc_notify: "
+                                       "cannot query speed/stamina switch\n");
+                               return;
+                       }
+
+                       /* restore original event number */
+                       ev = event;
+
+                       if (result & 0x02)
+                               acpi_bus_generate_proc_event(
+                                               sony_nc_acpi_device, 1, ev);
+                       else
+                               acpi_bus_generate_proc_event(
+                                               sony_nc_acpi_device, 0, ev);
 #endif
 			return;
 		}
@@ -1313,22 +1325,11 @@ static acpi_status sony_walk_callback(acpi_handle handle, u32 level,
 {
 	struct acpi_device_info *info;
 
-#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,31)
 	if (ACPI_SUCCESS(acpi_get_object_info(handle, &info))) {
-#else
-	struct acpi_buffer buffer = {ACPI_ALLOCATE_BUFFER, NULL};
-
-	if (ACPI_SUCCESS(acpi_get_object_info(handle, &buffer))) {
-		info = buffer.pointer;
-#endif
 		printk(KERN_WARNING DRV_PFX "method: name: %4.4s, args %X\n",
 			(char *)&info->name, info->param_count);
 
-#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,31)
 		kfree(info);
-#else
-		kfree(buffer.pointer);
-#endif
 	}
 
 	return AE_OK;
@@ -1470,7 +1471,7 @@ static int sony_nc_setup_rfkill(struct acpi_device *device,
 	return err;
 }
 
-static void sony_nc_rfkill_update()
+static void sony_nc_rfkill_update(void)
 {
 	enum sony_nc_rfkill i;
 	int result;
@@ -1534,18 +1535,25 @@ static void sony_nc_rfkill_setup(struct acpi_device *device)
 	}
 
 	device_enum = (union acpi_object *) buffer.pointer;
-	if (!device_enum || device_enum->type != ACPI_TYPE_BUFFER) {
-		printk(KERN_ERR "Invalid SN06 return object 0x%.2x\n",
-				device_enum->type);
+	if (!device_enum) {
+		pr_err("Invalid SN06 return object\n");
+		goto out_no_enum;
+	}
+	if (device_enum->type != ACPI_TYPE_BUFFER) {
+		pr_err("Invalid SN06 return object type 0x%.2x\n",
+		       device_enum->type);
 		goto out_no_enum;
 	}
 
 	/* the buffer is filled with magic numbers describing the devices
 	 * available, 0xff terminates the enumeration
 	 */
-	while ((dev_code = *(device_enum->buffer.pointer + i)) != 0xff &&
-			i < device_enum->buffer.length) {
-		i++;
+	for (i = 0; i < device_enum->buffer.length; i++) {
+
+		dev_code = *(device_enum->buffer.pointer + i);
+		if (dev_code == 0xff)
+			break;
+
 		dprintk("Radio devices, looking at 0x%.2x\n", dev_code);
 
 		if (dev_code == 0 && !sony_rfkill_devices[SONY_WIFI])
@@ -1623,14 +1631,14 @@ static int sony_nc_add(struct acpi_device *device)
 	}
 
 #ifdef SONY_ZSERIES
-	status = acpi_install_notify_handler(sony_nc_acpi_handle,
-					     ACPI_DEVICE_NOTIFY,
-					     sony_nc_notify, NULL);
-	if (ACPI_FAILURE(status)) {
-		printk(KERN_WARNING DRV_PFX "unable to install notify handler (%u)\n", status);
-		result = -ENODEV;
-		goto outinput;
-	}
+       status = acpi_install_notify_handler(sony_nc_acpi_handle,
+                                            ACPI_DEVICE_NOTIFY,
+                                            sony_nc_notify, NULL);
+       if (ACPI_FAILURE(status)) {
+               printk(KERN_WARNING DRV_PFX "unable to install notify handler (%u)\n", status);
+               result = -ENODEV;
+               goto outinput;
+       }
 #endif
 
 	if (acpi_video_backlight_support()) {
@@ -1638,8 +1646,9 @@ static int sony_nc_add(struct acpi_device *device)
 		       "controlled by ACPI video driver\n");
 	} else if (ACPI_SUCCESS(acpi_get_handle(sony_nc_acpi_handle, "GBRT",
 						&handle))) {
-							struct backlight_properties props;
+		struct backlight_properties props;
 		memset(&props, 0, sizeof(struct backlight_properties));
+		props.type = BACKLIGHT_PLATFORM;
 		props.max_brightness = SONY_MAX_BRIGHTNESS - 1;
 		sony_backlight_device = backlight_device_register("sony", NULL,
 								  NULL,
@@ -1713,14 +1722,15 @@ static int sony_nc_add(struct acpi_device *device)
 		backlight_device_unregister(sony_backlight_device);
 
 #ifdef SONY_ZSERIES
-	status = acpi_remove_notify_handler(sony_nc_acpi_handle,
-					    ACPI_DEVICE_NOTIFY,
-					    sony_nc_notify);
-	if (ACPI_FAILURE(status))
-		printk(KERN_WARNING DRV_PFX "unable to remove notify handler\n");
+       status = acpi_remove_notify_handler(sony_nc_acpi_handle,
+                                           ACPI_DEVICE_NOTIFY,
+                                           sony_nc_notify);
+       if (ACPI_FAILURE(status))
+               printk(KERN_WARNING DRV_PFX "unable to remove notify handler\n");
 
       outinput:
 #endif
+
 	sony_laptop_remove_input();
 
       outwalk:
@@ -1732,8 +1742,9 @@ static int sony_nc_remove(struct acpi_device *device, int type)
 {
 	struct sony_nc_value *item;
 #ifdef SONY_ZSERIES
-	acpi_status status;
+        acpi_status status;
 #endif
+
 
 	if (sony_backlight_device)
 		backlight_device_unregister(sony_backlight_device);
@@ -1741,11 +1752,11 @@ static int sony_nc_remove(struct acpi_device *device, int type)
 	sony_nc_acpi_device = NULL;
 
 #ifdef SONY_ZSERIES
-	status = acpi_remove_notify_handler(sony_nc_acpi_handle,
-					    ACPI_DEVICE_NOTIFY,
-					    sony_nc_notify);
-	if (ACPI_FAILURE(status))
-		printk(KERN_WARNING DRV_PFX "unable to remove notify handler\n");
+       status = acpi_remove_notify_handler(sony_nc_acpi_handle,
+                                           ACPI_DEVICE_NOTIFY,
+                                           sony_nc_notify);
+       if (ACPI_FAILURE(status))
+               printk(KERN_WARNING DRV_PFX "unable to remove notify handler\n");
 #endif
 
 	for (item = sony_nc_values; item->name; ++item) {
@@ -2517,12 +2528,12 @@ static struct sonypi_compat_s sonypi_compat = {
 static int sonypi_misc_fasync(int fd, struct file *filp, int on)
 {
 #ifdef SONY_ZSERIES
-	int retval;
+       int retval;
 
-	retval = fasync_helper(fd, filp, on, &sonypi_compat.fifo_async);
-	if (retval < 0)
-		return retval;
-	return 0;
+       retval = fasync_helper(fd, filp, on, &sonypi_compat.fifo_async);
+       if (retval < 0)
+               return retval;
+       return 0;
 #else
 	return fasync_helper(fd, filp, on, &sonypi_compat.fifo_async);
 #endif
@@ -2735,6 +2746,7 @@ static const struct file_operations sonypi_misc_fops = {
 	.release	= sonypi_misc_release,
 	.fasync		= sonypi_misc_fasync,
 	.unlocked_ioctl	= sonypi_misc_ioctl,
+	.llseek		= noop_llseek,
 };
 
 static struct miscdevice sonypi_misc_device = {
