@@ -2,7 +2,10 @@
 This version of the sony-laptop module is the one distributed by
 Eva (see original README) plus the following changes:
 
-09.np8pre1
+0.9np8pre2
+  - more 2.6.39-rc1 merge
+
+0.9np8pre1
   - adapt to current 2.6.39rc round
   - include patches by Adam Hill for newer laptops
 
