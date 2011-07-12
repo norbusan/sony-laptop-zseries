@@ -91,7 +91,7 @@ do {						\
 } while (0)
 
 #ifdef SONY_ZSERIES
-#define SONY_LAPTOP_DRIVER_VERSION     "0.9np8pre2"
+#define SONY_LAPTOP_DRIVER_VERSION     "0.9np8pre3"
 #else
 #define SONY_LAPTOP_DRIVER_VERSION	"0.6"
 #endif
