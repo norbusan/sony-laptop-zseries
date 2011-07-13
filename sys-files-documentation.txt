@@ -1,0 +1,47 @@
+The following files in /sys/devices/platform/sony-laptop
+allow controlling various aspects.
+
+The documentation here was created by Norbert Preining by reading the
+source, so it might be wrong and burn your computer ;-)
+
+lid_resume_control
+	controls resume when lid is opened
+	0	do nothing
+	1	resume from S4 (ram)
+	2	resume from S3 (disk)
+	3	resume from S4 and S3
+
+odd_power
+	controls the cdrom drive connection
+	0	disconnected (off)
+	1	connected (on)
+
+battery_care_limiter
+	controls up to which level a battery is charged
+	0	no limit
+	1	80%
+	2	50%
+
+thermal_control
+	controls the temperature/fan activity (AFAIU)
+	0	balanced
+	1	performance
+	2	silent
+
+thermal_profiles
+	number of different profiles???
+
+touchpad
+	turns touchpad on or off
+	0	off
+	1	on
+
+wwanpower
+	???
+
+bluetoothpower
+	???
+
+power/*
+	???
+
