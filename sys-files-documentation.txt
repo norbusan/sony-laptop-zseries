@@ -7,8 +7,8 @@ source, so it might be wrong and burn your computer ;-)
 lid_resume_control
 	controls resume when lid is opened
 	0	do nothing
-	1	resume from S4 (ram)
-	2	resume from S3 (disk)
+	1	resume from S4 (disk)
+	2	resume from S3 (ram)
 	3	resume from S4 and S3
 
 odd_power
