@@ -2,6 +2,9 @@
 This version of the sony-laptop module is the one distributed by
 Eva (see original README) plus the following changes:
 
+0.9np8
+  - no changes to the code since pre3
+
 0.9np8pre3
   - merge patches from Marco Chiappero for largely improved support of Sony
     laptops http://www.absence.it/vaio-acpi/source/patches/
